@@ -9,9 +9,8 @@ from .assignment_parser import assignment_parser
 from .ScheduleParser import parse_keywords, parse_tables, parse_schedule, extract_grade_breakdown
 import pdfplumber
 import re
-#import pandas as pd
+import pandas as pd
 from django.contrib.auth.views import LoginView
-from .forms import RegistrationForm
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from decouple import config
@@ -22,7 +21,8 @@ from datetime import datetime
 # constants for connecting to google calendar API
 CAL_ID = config('CAL_ID')
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-SERVICE_ACCOUNT_FILE = './core/calendar-credentials.json'
+SERVICE_ACCOUNT_FILE = 'calendar-credentials.json'
+file_path = os.path.join(os.path.dirname(__file__), SERVICE_ACCOUNT_FILE)
 
 @login_required
 def extract_text_from_pdf(pdf_file):
@@ -37,8 +37,9 @@ def extract_text_from_pdf(pdf_file):
 
 @login_required
 def home(request):
+    user = request.user  # Assuming the user is authenticated
     # Credentials to connect to google cloud API and service account to add events to calendar
-    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    credentials = service_account.Credentials.from_service_account_file(file_path, scopes=SCOPES)
     service = googleapiclient.discovery.build('calendar', 'v3', credentials=credentials)
     # Define parameters to fetch upcoming events
     calendar_id = CAL_ID  # Replace with your calendar ID
@@ -62,30 +63,33 @@ def home(request):
             due_date_string = due_date['date']
             due_date_date = datetime.strptime(due_date_string, '%Y-%m-%d')
             current_date = datetime.now().date()
-
+            print(current_date)
+            print(due_date_date.date())
             if due_date_date.date() == current_date:
                 today_event_titles.append(event.get('summary', ''))
-        if "Progress: not started" in description:
-            not_started_assignments.append(event.get('summary', ''))
-        elif "Progress: in progress" in description:
-            in_progress_assignments.append(event.get('summary', ''))
-        elif "Progress: completed" in description:
-            completed_assignments.append(event.get('summary', ''))
+            if due_date_date.date() >= current_date:
+                if "Progress: not started" in description:
+                    not_started_assignments.append(event.get('summary', ''))
+                elif "Progress: in progress" in description:
+                    in_progress_assignments.append(event.get('summary', ''))
+                else:
+                    completed_assignments.append(event.get('summary', ''))
 
          # Calculate the overall progress for assignments
-    total_assignments = len(events)
+    total_assignments = len(in_progress_assignments) + len(completed_assignments) + len(not_started_assignments)
+    print(total_assignments)
     in_progress_count = len(in_progress_assignments)
     completed_count = len(completed_assignments)
     overall_progress = ((completed_count + (in_progress_count / 2)) / total_assignments) if total_assignments > 0 else 1.0
-
+    overall_progress = overall_progress * 100
     return render(request, 'core/home.html', {
         'overall_progress': overall_progress,
         'not_started_assignments': not_started_assignments,
         'in_progress_assignments': in_progress_assignments,
         'completed_assignments': completed_assignments,
-        'today_event_titles': today_event_titles })
+        'today_event_titles': today_event_titles, 
+        'user_name': user.username})
 
-@login_required
 def parser(request):
     if request.method == 'POST':
         form = UploadFileForm(request.POST, request.FILES)
@@ -132,14 +136,5 @@ def parser(request):
 
     return render(request, 'parser/parser.html', {'form': form})
 
-def registration(request):
-    if request.method == 'POST':
-        form = RegistrationForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            return redirect('home')  # Redirect to the home page after successful registration
-    else:
-        form = RegistrationForm()
-    return render(request, 'registration/registration.html', {'form': form})
+
 

@@ -13,7 +13,7 @@ from datetime import datetime
 import re
 
 # constants for connecting to google calendar API
-CAL_ID = 'c_6ed17073345c64d5b392f5a8ef7b4a62938f12c8fc5fecfa4b7256ef88acad28@group.calendar.google.com'
+CAL_ID = "c_6ed17073345c64d5b392f5a8ef7b4a62938f12c8fc5fecfa4b7256ef88acad28@group.calendar.google.com"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 SERVICE_ACCOUNT_FILE = './core/calendar-credentials.json'
 
@@ -77,7 +77,7 @@ def add(request):
     if request.method == 'POST':
         if 'add' in request.POST:
             # form to add event
-            add_form = EventForm(request.POST)
+            add_form = EventForm(request.user, request.POST)
             if add_form.is_valid():
                 event = add_form.save(commit=False)
                 event.save()
@@ -87,13 +87,14 @@ def add(request):
                 # Get the recurrence option from the form
                 recurrence_option = add_form.cleaned_data.get('repeat')
                 recurrence_date = add_form.cleaned_data.get('repeat_until')
+                invited = add_form.cleaned_data.get('friends')
                 if recurrence_date:
                     recurrence_date = recurrence_date.isoformat()
                 recurrence_rule = None
 
                 if recurrence_option:
                     recurrence_rule = get_recurrence_rule(recurrence_option, recurrence_date)
-                event_description = f'Priority: {event.priority}\nProgress: {event.progress}\nTime to Spend: {event.time_to_spend}\nAmount per Week: {event.amount_per_week}'
+                event_description = f'Priority: {event.priority}\nProgress: {event.progress}\nTime to Spend: {event.time_to_spend}\nAmount per Week: {event.amount_per_week}\nFriends: {invited}'
                 # CREATE A NEW EVENT IN CALENDAR
                 new_event = {
                 'summary': add_form.cleaned_data['event_name'],
@@ -112,7 +113,7 @@ def add(request):
                     new_event['recurrence'] = [f'RRULE:{recurrence_rule}']
 
                 # add event to calendar
-                service.events().insert(calendarId=CAL_ID, body=new_event).execute()
+                service.events().insert(calendarId=CAL_ID, body=new_event, sendUpdates='all').execute()
                 print('EVENT CREATED')
                 return redirect('/calendar/')
             # if add form isnt valid
@@ -129,7 +130,7 @@ def add(request):
         event_name = request.GET.get('event_name', '')
         class_name = request.GET.get('class_name', '')
         due_date = request.GET.get('due_date', '')
-        form_data = EventForm(initial={'event_name': event_name, 'class_name': class_name, 'due_date': due_date})
+        form_data = EventForm(request.user, initial={'event_name': event_name, 'class_name': class_name, 'due_date': due_date})
         context = {
             'form_data' : form_data
         }
@@ -138,9 +139,11 @@ def add(request):
 def delete(request):
     event_title = request.GET.get('event_title')
     due_date = request.GET.get('due_date')
-    due_date = datetime.strptime(due_date, '%Y-%m-%d')
+    if due_date != None:
+        due_date = datetime.strptime(due_date, '%Y-%m-%d')
     start_date = request.GET.get('start_date')
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
+    if start_date != None:
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
     credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     service = googleapiclient.discovery.build('calendar', 'v3', credentials=credentials)
     if request.method == 'GET':
@@ -170,4 +173,137 @@ def delete(request):
                         event_id = event.get('id', '')
                         service.events().delete(calendarId=CAL_ID, eventId=event_id).execute()
     context = {}
-    return render(request, 'calendar/calendar.html', context)
+    return render(request, 'calendar/delete_assignment.html', context)
+
+def edit_event(request):
+    event_title = request.GET.get('event_title')
+    due_date = request.GET.get('due_date')
+    if due_date:
+        due_date = datetime.strptime(due_date, '%Y-%m-%d')
+    start_date = request.GET.get('start_date')
+    if start_date:
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    service = googleapiclient.discovery.build('calendar', 'v3', credentials=credentials)
+    if request.method == 'GET':
+        if 'event_title' in request.GET:
+            calendar_id = CAL_ID  # Replace with your calendar ID
+            now = datetime.utcnow()
+            events_result = service.events().list(
+            calendarId=calendar_id,
+            timeMin=now.isoformat() + 'Z',  # Filter events that start from now or later
+            maxResults=10,  # Maximum number of events to retrieve
+            singleEvents=True,
+            orderBy='startTime'
+            ).execute()
+            events = events_result.get('items', [])
+            for event in events:
+                due_date_var = event.get('end', '')
+                if due_date_var:
+                    due_date_string = due_date_var['date']
+                    due_date_date = datetime.strptime(due_date_string, '%Y-%m-%d')
+                start_date_var = event.get('start', '')
+                if start_date_var:
+                    start_date_string = start_date_var['date']
+                    start_date_date = datetime.strptime(start_date_string, '%Y-%m-%d')
+                if event.get('summary', '') == event_title:  
+                    if due_date_date.date() == due_date.date() and start_date_date.date() == start_date.date():
+                        event_id = event.get('id', '')
+                        description = event.get('description', '')
+                        # Split the description string into key-value pairs
+                        properties_list = description.split('\n')
+                        # Create a dictionary from the key-value pairs
+                        extended_properties = {}
+                        for prop in properties_list:
+                            key, value = prop.split(': ', 1)  # Split at the first occurrence of ': ' to handle potential colons in values
+                            extended_properties[key] = value
+                        priority = extended_properties['Priority']
+                        progress = extended_properties['Progress']
+                        time_to_spend = extended_properties['Time to Spend']
+                        amount_per_week = extended_properties['Amount per Week']
+                        friends = extended_properties['Friends']
+                        form_data = EventForm(request.user, initial={
+                        'event_name': event.get('summary', ''), 
+                        'class_name': event.get('location', ''),
+                        'due_date': due_date_date.strftime('%Y-%m-%d'),
+                        'start_date': start_date_date.strftime('%Y-%m-%d'),
+                        'priority': priority,
+                        'progress': progress,
+                        'time_to_spend': time_to_spend,
+                        'amount_per_week': amount_per_week,
+                        'friends': friends
+                        }
+                        )
+                        context = {
+                            'form_data' : form_data
+                        }
+                        return render(request, 'calendar/edit_event.html', context)
+        context = {}
+        return render(request, 'calendar/edit_assignment.html', context)
+    elif request.method == 'POST':
+        if 'edit' in request.POST:
+            calendar_id = CAL_ID  # Replace with your calendar ID
+            now = datetime.utcnow()
+            events_result = service.events().list(
+            calendarId=calendar_id,
+            timeMin=now.isoformat() + 'Z',  # Filter events that start from now or later
+            maxResults=10,  # Maximum number of events to retrieve
+            singleEvents=True,
+            orderBy='startTime'
+            ).execute()
+            # form to add event
+            add_form = EventForm(request.user, request.POST)
+            if add_form.is_valid():
+                event = add_form.save(commit=False)
+                event.save()
+                        # need to convert dates into ISO format for calendar events
+                start_date = add_form.cleaned_data['start_date'].isoformat()
+                due_date = add_form.cleaned_data['due_date'].isoformat()
+                         # Get the recurrence option from the form
+                recurrence_option = add_form.cleaned_data.get('repeat')
+                recurrence_date = add_form.cleaned_data.get('repeat_until')
+                invited = add_form.cleaned_data.get('friends')
+                if recurrence_date:
+                    recurrence_date = recurrence_date.isoformat()
+                recurrence_rule = None
+
+                if recurrence_option:
+                    recurrence_rule = get_recurrence_rule(recurrence_option, recurrence_date)
+                event_description = f'Priority: {event.priority}\nProgress: {event.progress}\nTime to Spend: {event.time_to_spend}\nAmount per Week: {event.amount_per_week}\nFriends: {invited}'
+                            # CREATE A NEW EVENT IN CALENDAR
+                new_event = {
+                'summary': add_form.cleaned_data['event_name'],
+                'location': f'{add_form.cleaned_data["class_name"]}',
+                'description': event_description,
+                'start': {
+                'date': f'{start_date}',
+                'timeZone': 'America/Los_Angeles',
+                },
+                'end': {
+                    'date': f"{due_date}",
+                    'timeZone': 'America/Los_Angeles',
+                    },
+                }
+                if recurrence_rule:
+                    new_event['recurrence'] = [f'RRULE:{recurrence_rule}']
+                events = events_result.get('items', [])
+                for event in events:
+                    due_date_var = event.get('end', '')
+                    if due_date_var:
+                        due_date_string = due_date_var['date']
+                        due_date_date = datetime.strptime(due_date_string, '%Y-%m-%d')
+                        due_date = datetime.strptime(due_date, '%Y-%m-%d')
+                    start_date_var = event.get('start', '')
+                    if start_date_var:
+                        start_date_string = start_date_var['date']
+                        start_date_date = datetime.strptime(start_date_string, '%Y-%m-%d')
+                        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+                    if event.get('summary', '') == add_form.cleaned_data['event_name']:
+                        if due_date_date.date() == due_date.date() and start_date_date.date() == start_date.date():
+                            event_id = event.get('id', '')
+                            # add event to calendar
+                            service.events().update(calendarId=CAL_ID, eventId=event_id, body=new_event).execute()
+                            print('EVENT UPDATED')
+                            return redirect('/calendar/')
+        print("ERROR")
+
