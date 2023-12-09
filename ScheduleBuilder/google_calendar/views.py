@@ -13,7 +13,7 @@ from datetime import datetime
 import re
 
 # constants for connecting to google calendar API
-CAL_ID = "c_6ed17073345c64d5b392f5a8ef7b4a62938f12c8fc5fecfa4b7256ef88acad28@group.calendar.google.com"
+CAL_ID = config('CAL_ID')
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 SERVICE_ACCOUNT_FILE = './core/calendar-credentials.json'
 
